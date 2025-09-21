@@ -1,4 +1,4 @@
-# AAA Dataset Toolkit (GND-based)
+# All Around Assistance (AAA) Dataset
 
 ## About the AAA Dataset
 
