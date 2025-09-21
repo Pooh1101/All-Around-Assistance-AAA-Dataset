@@ -1,0 +1,8 @@
+numpy
+opencv-python
+tqdm
+py360convert
+Pillow
+transformers
+safetensors
+torch
