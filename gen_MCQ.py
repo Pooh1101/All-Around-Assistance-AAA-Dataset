@@ -10,7 +10,7 @@ import numpy as np
 
 # =================== Paths ===================
 input_dir = "/mnt/data1/zheyu/workshop/newinf_360_bitmap_results"   # 內含多個 panoptic.jsonl
-output_dir = "/mnt/data1/zheyu/workshop/_MCQ_"
+output_dir =  "/mnt/data1/zheyu/workshop/_MCQ_"
 os.makedirs(output_dir, exist_ok=True)
 
 # =================== Params ===================
@@ -55,7 +55,7 @@ walkable_backgrounds = {
     "floor-other-merged", "platform", "playingfield"
 }
 
-# =================== Templates（逐字對齊你的圖） ===================
+# =================== Templates（逐字對齊你的圖；category 仍用舊名，稍後會 remap） ===================
 # 第二欄為四大 categories：Object Information / Safety / Navigation / Vicinity Awareness
 question_templates = {
     # Object
@@ -86,7 +86,6 @@ question_templates = {
 # =================== Helpers ===================
 def is_background(label):
     return (label in background_labels) or (label in walkable_backgrounds) or label.endswith("-other-merged")
-
 
 def normalize_label(name):
     return name.replace("-other-merged","").replace("-merged","").replace("_"," ")
@@ -122,7 +121,6 @@ def load_bitmap_abs(base_dir, mask_path):
 
 # --- simple bitmap cache to speed up repeated loads ---
 _BM_CACHE = {}
-
 def load_bitmap_cached(base_dir, mask_path):
     key = (base_dir, mask_path)
     if key in _BM_CACHE:
@@ -209,8 +207,8 @@ def pick_follow_region(segments):
                 s.get("direction", None),
             ))
     # 候選選項（背景名稱去重，依面積由大到小）
-    from collections import defaultdict
-    best_area_per_name = defaultdict(float)
+    from collections import defaultdict as _dd
+    best_area_per_name = _dd(float)
     for name, ar, _ in all_bg:
         if ar > best_area_per_name[name]:
             best_area_per_name[name] = ar
@@ -240,12 +238,34 @@ def pick_follow_region(segments):
 
     return correct, options_names
 
-# ===== 改版 pack_mcq：qid_number=Template ID(1~16)，移除 source =====
-def pack_mcq(qid_number, question_id, image, q_text, q_type, correct, options,
-             trigger_type, category, rnd: random.Random, mask_path=None):
+# ==== Category rename ====
+CATEGORY_MAP = {
+    "Object Information": "Object",
+    "Safety": "Safety",
+    "Navigation": "Navigation",
+    "Vicinity Awareness": "Surrounding",
+}
+def remap_category(cat: str) -> str:
+    return CATEGORY_MAP.get(cat, cat)
+
+# ==== Direction helpers ====
+def dirs_of_segments(segs):
+    # 蒐集該些 segments 的方向（front/left/right/back），去重+排序
+    d = [s.get("direction") for s in segs if s.get("direction") in {"front","left","right","back"}]
+    return sorted(set(d))
+
+def singleton_dir_list(d):
+    # 將單一方向字串轉為 list；若無則空 list
+    return [d] if d in {"front","left","right","back"} else []
+
+# ===== 新版 pack_mcq：固定欄位順序與內容 =====
+def pack_mcq(qid_number, question_id, image, category, trigger_type, direction,
+             q_text, correct, options, rnd: random.Random, mask_path=None):
     """
-    qid_number : int → 代表是哪個 template (1~16)
-    question_id: int → 全局流水號
+    欄位順序固定為：
+    {question_id, qid_number, image, category, trigger_type, direction, question, choices, answer, mask}
+    - category 需先經 remap_category()
+    - direction 為 list[str]，可空 list
     """
     # 整理 4 個選項
     uniq, seen = [], set()
@@ -253,7 +273,7 @@ def pack_mcq(qid_number, question_id, image, q_text, q_type, correct, options,
         if o not in seen:
             uniq.append(o); seen.add(o)
     if correct not in seen:
-        uniq = ([correct] + uniq) if len(uniq)<4 else (uniq[:-1] + [correct])
+        uniq = ([correct] + uniq) if len(uniq) < 4 else (uniq[:-1] + [correct])
         seen.add(correct)
     filler_pool = ["none of the above","not applicable","unknown","not visible"]
     i = 0
@@ -270,16 +290,17 @@ def pack_mcq(qid_number, question_id, image, q_text, q_type, correct, options,
     letters = ["A","B","C","D"]
     choices = {letters[i]: uniq[i] for i in range(4)}
     answer_letter = letters[uniq.index(correct)]
+
     out = {
-        "qid_number": qid_number,                    # 固定 1~16 template ID
-        "question_id": f"{question_id:06d}",         # 全局流水號
+        "question_id": f"{question_id:06d}",
+        "qid_number": qid_number,
         "image": image,
+        "category": remap_category(category),
+        "trigger_type": trigger_type,
+        "direction": direction,          # list[str]
         "question": q_text,
-        "question_type": q_type,
         "choices": choices,
         "answer": answer_letter,
-        "trigger_type": trigger_type,
-        "category": category
     }
     if mask_path:
         out["mask"] = mask_path
@@ -374,31 +395,34 @@ for pan_path in sorted(panoptic_files):
                 obj_disp = normalize_label(tlabel)
                 reps = label_to_segments.get(tlabel, [])
                 rep_seg = max(reps, key=lambda s: s.get("area_ratio", 0.0)) if reps else None
+                rep_mask = (rep_seg.get("mask", {}).get("path") if rep_seg else None)
+                r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
 
-                # 1) How many {obj} are there?
+                # 物件方向集合
+                obj_dirs = dirs_of_segments(reps)
+
+                # 1) How many {obj} are there?  -> direction = 物件出現的方向集合
                 q_text, q_cat = question_templates["count"]
                 correct = str(current_labels.get(tlabel, 0))
                 options = [correct, str(max(0, int(correct) - 1)), str(int(correct) + 1)]
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(1, question_id, image, q_text.format(obj=obj_disp), q_cat, correct, options,
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(1, question_id, image, q_cat, "object", obj_dirs,
+                             q_text.format(obj=obj_disp), correct, options, rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 2) Is the {obj} on my left/right?
+                # 2) Is the {obj} on my {direction}?  -> direction = [direction]
                 for direction in ["left", "right", "front", "back"]:
                     q_text, q_cat = question_templates["sidedness"]
                     has_dir = any(seg.get("direction") == direction for seg in reps)
                     correct = "Yes" if has_dir else "No"
                     rnd = seeded_random(rel_dir, image, question_id, q_text + direction)
                     output_entries.append(
-                        pack_mcq(2, question_id, image, q_text.format(obj=obj_disp, direction=direction), q_cat,
-                                 correct, yesno_options(), "object", q_cat, rnd,
-                                 mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                        pack_mcq(2, question_id, image, q_cat, "object", singleton_dir_list(direction),
+                                 q_text.format(obj=obj_disp, direction=direction), correct, yesno_options(), rnd, mask_path=rep_mask)
                     ); question_id += 1
 
-                # 3) Should I avoid the {obj} ahead?
+                # 3) Should I avoid the {obj} ahead? -> ["front"]
                 q_text, q_cat = question_templates["avoidance"]
                 frontish = any(seg.get("direction") == "front" for seg in reps)
                 risky = any(s.get("mean_depth", 1.0) <= DEPTH_NEAR_THR or s.get("area_ratio", 0.0) >= AREA_BIG_THR for s in reps)
@@ -408,12 +432,11 @@ for pan_path in sorted(panoptic_files):
                 correct = "Yes" if (frontish and (risky or hit_by_bitmap)) else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(3, question_id, image, q_text.format(obj=obj_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(3, question_id, image, q_cat, "object", ["front"],
+                             q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 4) Is an {obj} blocking the {r}?
+                # 4) Is an {obj} blocking the {r}? -> ["front"]
                 q_text, q_cat = question_templates["blocking_obj_route"]
                 is_blocking, used_bitmap = False, False
                 if rep_seg is not None:
@@ -422,14 +445,12 @@ for pan_path in sorted(panoptic_files):
                     is_blocking = frontish and risky
                 correct = "Yes" if is_blocking else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
-                r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
                 output_entries.append(
-                    pack_mcq(4, question_id, image, q_text.format(obj=obj_disp, r=r_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(4, question_id, image, q_cat, "object", ["front"],
+                             q_text.format(obj=obj_disp, r=r_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 5) Are there obstacles on the {r}?
+                # 5) Are there obstacles on the {r}? -> []
                 q_text, q_cat = question_templates["obstacle_bg"]
                 has_obstacle = False
                 used_any_bitmap = False
@@ -446,13 +467,12 @@ for pan_path in sorted(panoptic_files):
                     has_obstacle = any(not is_background(s["label_name"]) for s in segments)
                 correct = "Yes" if has_obstacle else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
-                r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
                 output_entries.append(
-                    pack_mcq(5, question_id, image, q_text.format(r=r_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd)
+                    pack_mcq(5, question_id, image, q_cat, "object", [],
+                             q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 6) Is it safe to walk on the {r} ahead?
+                # 6) Is it safe to walk on the {r} ahead? -> ["front"]
                 q_text, q_cat = question_templates["safe_to_walk"]
                 unsafe = False
                 used_any_bitmap = False
@@ -471,86 +491,80 @@ for pan_path in sorted(panoptic_files):
                     unsafe = closest_front <= DEPTH_NEAR_THR
                 correct = "No" if unsafe else "Yes"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
-                r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
                 output_entries.append(
-                    pack_mcq(6, question_id, image, q_text.format(r=r_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd)
+                    pack_mcq(6, question_id, image, q_cat, "object", ["front"],
+                             q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 8) What is the relative position of the {obj}?
+                # 8) What is the relative position of the {obj}? -> [main_dir]
                 q_text, q_cat = question_templates["direction"]
                 dirs = [s.get("direction", "front") for s in reps]
                 main_dir = max(set(dirs), key=dirs.count) if dirs else "front"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(8, question_id, image, q_text.format(obj=obj_disp), q_cat, main_dir, direction_options(),
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(8, question_id, image, q_cat, "object", singleton_dir_list(main_dir),
+                             q_text.format(obj=obj_disp), main_dir, direction_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 9) Am I still walking on the {r}?
+                # 9) Am I still walking on the {r}? -> []
                 q_text, q_cat = question_templates["walking_surface"]
                 has_bg = any(s["label_name"] in walkable_backgrounds for s in segments)
                 correct = "Yes" if has_bg else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
-                r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
                 output_entries.append(
-                    pack_mcq(9, question_id, image, q_text.format(r=r_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd)
+                    pack_mcq(9, question_id, image, q_cat, "object", [],
+                             q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 10) Which region should I follow?
+                # 10) Which region should I follow? -> ["front"]
                 q_text, q_cat = question_templates["route_confirmation"]
                 correct_opt, options = pick_follow_region(segments)
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(10, question_id, image, q_text, q_cat, correct_opt, options,
-                             "object", q_cat, rnd)
+                    pack_mcq(10, question_id, image, q_cat, "object", ["front"],
+                             q_text, correct_opt, options, rnd)
                 ); question_id += 1
 
-                # 11) Is the {obj} visible from here?
+                # 11) Is the {obj} visible from here? -> 物件方向集合
                 q_text, q_cat = question_templates["presence"]
                 present = (current_labels.get(tlabel, 0) > 0)
                 correct = "Yes" if present else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(11, question_id, image, q_text.format(obj=obj_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(11, question_id, image, q_cat, "object", obj_dirs,
+                             q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 14) Is there an {obj} in front of me?
+                # 14) Is there an {obj} in front of me? -> ["front"]
                 q_text, q_cat = question_templates["front_presence"]
                 in_front = any(s.get("direction") == "front" for s in reps)
                 correct = "Yes" if in_front else "No"
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
                 output_entries.append(
-                    pack_mcq(14, question_id, image, q_text.format(obj=obj_disp), q_cat, correct, yesno_options(),
-                             "object", q_cat, rnd,
-                             mask_path=(rep_seg.get("mask", {}).get("path") if rep_seg else None))
+                    pack_mcq(14, question_id, image, q_cat, "object", ["front"],
+                             q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
-
 
             # ---------- Time 觸發 ----------
             if (idx - last_time_tick) >= GENERAL_QUESTION_INTERVAL:
                 objs = [s for s in segments if not is_background(s["label_name"])]
-                obj_names = sorted({normalize_label(s["label_name"]) for s in objs})
 
-                # 7) What is blocking the {r} ahead?
+                # 7) What is blocking the {r} ahead? -> ["front"]
                 q_text, q_cat = question_templates["general_blocking"]
+                obj_names = sorted({normalize_label(s["label_name"]) for s in objs})
                 correct = obj_names[0] if obj_names else "none of the above"
                 pool = [o for o in object_labels if normalize_label(o) not in obj_names]
                 rnd = seeded_random(rel_dir, image, question_id, q_text)   # 先產生 rnd
                 rnd.shuffle(pool)                                          # 再 shuffle
                 options = [correct] + pool[:3]
-                r_disp = next((normalize_label(s["label_name"]) for s in segments 
+                r_disp = next((normalize_label(s["label_name"]) for s in segments
                                if s["label_name"] in walkable_backgrounds), "road")
                 output_entries.append(
-                    pack_mcq(7, question_id, image, q_text.format(r=r_disp), q_cat, correct, options,
-                             "time", q_cat, rnd)
+                    pack_mcq(7, question_id, image, q_cat, "time", ["front"],
+                             q_text.format(r=r_disp), correct, options, rnd)
                 ); question_id += 1
 
-                # 12) Closest in front
+                # 12) Closest in front -> ["front"]
                 q_text, q_cat = question_templates["closest_object"]
                 front_objs = [(normalize_label(s["label_name"]), s.get("mean_depth", None), s.get("area_ratio", 0.0))
                               for s in objs if s.get("direction") == "front"]
@@ -564,11 +578,11 @@ for pan_path in sorted(panoptic_files):
                 rnd.shuffle(pool)
                 options = [correct] + list(pool)[:3]
                 output_entries.append(
-                    pack_mcq(12, question_id, image, q_text, q_cat, correct, options,
-                             "time", q_cat, rnd)
+                    pack_mcq(12, question_id, image, q_cat, "time", ["front"],
+                             q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 13) Farthest in front
+                # 13) Farthest in front -> ["front"]
                 q_text, q_cat = question_templates["farthest_object"]
                 if front_objs:
                     score = [(n, (d if d is not None else (1.0 - a))) for (n, d, a) in front_objs]
@@ -580,11 +594,11 @@ for pan_path in sorted(panoptic_files):
                 rnd.shuffle(pool)
                 options = [correct] + list(pool)[:3]
                 output_entries.append(
-                    pack_mcq(13, question_id, image, q_text, q_cat, correct, options,
-                             "time", q_cat, rnd)
+                    pack_mcq(13, question_id, image, q_cat, "time", ["front"],
+                             q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 15) Which object is nearby?
+                # 15) Which object is nearby? -> 周圍方向集合
                 q_text, q_cat = question_templates["general_around"]
                 if objs:
                     score_all = [(normalize_label(s["label_name"]), (s.get("mean_depth", None)), s.get("area_ratio", 0.0)) for s in objs]
@@ -597,11 +611,11 @@ for pan_path in sorted(panoptic_files):
                 rnd.shuffle(pool)
                 options = [correct] + list(pool)[:3]
                 output_entries.append(
-                    pack_mcq(15, question_id, image, q_text, q_cat, correct, options,
-                             "time", q_cat, rnd)
+                    pack_mcq(15, question_id, image, q_cat, "time", dirs_of_segments(objs),
+                             q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 16) Which object is on my {direction}?
+                # 16) Which object is on my {direction}? -> [direction]
                 for direction in ["left", "right", "front", "back"]:
                     q_text, q_cat = question_templates["general_direction"]
                     dir_objs = [normalize_label(s["label_name"]) for s in objs if s.get("direction") == direction]
@@ -617,12 +631,11 @@ for pan_path in sorted(panoptic_files):
                     rnd.shuffle(pool)
                     options = [correct] + list(pool)[:3]
                     output_entries.append(
-                        pack_mcq(16, question_id, image, q_text.format(direction=direction), q_cat, correct, options,
-                                 "time", q_cat, rnd)
+                        pack_mcq(16, question_id, image, q_cat, "time", singleton_dir_list(direction),
+                                 q_text.format(direction=direction), correct, options, rnd)
                     ); question_id += 1
 
                 last_time_tick = idx
-
 
     # 依相對路徑取名，例如 AU/01 -> AU_01_questions_mcq.jsonl
     rel_name = rel_dir.replace(os.sep, "_")
