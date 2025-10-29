@@ -10,7 +10,7 @@ To support assistive applications for **visually impaired** users, AAA also incl
 - **Navigation** —  directions, and landmarks for wayfinding.
 - **Surrounding** — scene context, and overall environment.
 
-Together, these components enable fair comparison of models across AoVs while evaluating practical, assistive questions that matter in real-world settings.
+Together, these components enable fair comparison of models across AoVs while evaluating practical, assistive questions that matter in real-world settings. 
 
 We do not redistribute GND. Please download from the official site:
 [**GND dataset**](https://cs.gmu.edu/~xiao/Research/GND/).
