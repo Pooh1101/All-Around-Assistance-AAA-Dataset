@@ -27,6 +27,7 @@ cd All-Around-Assistance-AAA-Dataset
 
 Ensure the structure is as follows:
 
+```
 frames_folder_root/
 ├── AU/
 │   ├── S01/
@@ -39,6 +40,8 @@ frames_folder_root/
 │
 └── CUA/
     └── ... 
+```
+
 ```bash
 
 # build views (70 / 110 / 180 / 360)
