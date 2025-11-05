@@ -18,18 +18,31 @@ We do not redistribute GND. Please download from the official site:
 
 ## Quick Start
 
-### Install [**ROS Noetic**](https://wiki.ros.org/noetic/Installation/Ubuntu)
-
 ```bash
 git clone https://github.com/Pooh1101/All-Around-Assistance-AAA-Dataset.git
 cd All-Around-Assistance-AAA-Dataset
 ```
 
+### Download [**GND Dataset**](https://github.com/jingGM/GND)
+
+Ensure the structure is as follows:
+
+frames_folder_root/
+├── AU/
+│   ├── S01/
+│   │   ├── frame0000
+│   │   ├── frame0001
+│   │   └── ...
+│   ├── S02/
+│   │   └── ...
+│   └── ...
+│
+└── CUA/
+    └── ... 
 ```bash
-bash scripts/setup_dataset.sh
 
 # build views (70 / 110 / 180 / 360)
-python make_views_min.py <INPUT_ROOT> <OUTPUT_ROOT>
+python make_views_min.py </path/to/frames_folder_root> </path/to/output_folder>
 
 #run Mask2Former
-python mask2former_build_masks.py <OUTPUT_ROOT>/frames --model facebook/mask2former-swin-large-coco-panoptic --batch 4
+python mask2former_build_masks.py </path/to/output_folder>/frames --model facebook/mask2former-swin-large-coco-panoptic

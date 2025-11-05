@@ -9,21 +9,20 @@ import random
 import numpy as np
 
 # =================== Paths ===================
-input_dir = "/mnt/data1/zheyu/workshop/newinf_360_bitmap_results"   # 內含多個 panoptic.jsonl
-output_dir =  "/mnt/data1/zheyu/workshop/_MCQ_"
+input_dir = "" 
+output_dir =  ""
 os.makedirs(output_dir, exist_ok=True)
 
 # =================== Params ===================
-PERSISTENCE_THRESHOLD = 15           # Object 觸發門檻（連續幀）
-GENERAL_QUESTION_INTERVAL = 150      # Time 觸發（每 10s@15fps）
-BITMAP_OVERLAP_MIN = 0.03            # 視為「落在路面上」的最小交疊比（以物件面積為分母）
-BG_DILATE_PX = 3                     # 擴張可走背景的像素（bitmap overlap 更穩健）
-DEPTH_NEAR_THR = 0.25                # 視為「很近」的 mean_depth（0~1）
-AREA_BIG_THR = 0.08                  # 視為「很大」的面積比（佔整張比例）
-OVERLAP_MATCH_THR = 0.10             # 物件追蹤的 bitmap IoU 門檻（判定同一實體）
+PERSISTENCE_THRESHOLD = 15           
+GENERAL_QUESTION_INTERVAL = 150     
+BITMAP_OVERLAP_MIN = 0.03            
+BG_DILATE_PX = 3                    
+DEPTH_NEAR_THR = 0.25                
+AREA_BIG_THR = 0.08                  
+OVERLAP_MATCH_THR = 0.10             
 
 # =================== Label sets ===================
-# 僅 object（候選池）；background 會被排除
 object_labels = {
     'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
     'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat','dog',
@@ -38,7 +37,6 @@ object_labels = {
     'cardboard','counter','curtain','stairs','tent','towel'
 }
 
-# 背景集合（用於 is_background 判斷）
 background_labels = {
     'sky-other-merged','wall-brick','wall-stone','wall-tile','wall-wood',
     'ceiling-merged','window-other','mirror-stuff','light','tree-merged',
@@ -49,14 +47,12 @@ background_labels = {
     'water-other','playingfield','railroad','roof','window-blind'
 }
 
-# 只要 WALKABLE_STRICT
 walkable_backgrounds = {
     "pavement-merged", "road", "floor-wood",
     "floor-other-merged", "platform", "playingfield"
 }
 
-# =================== Templates（逐字對齊你的圖；category 仍用舊名，稍後會 remap） ===================
-# 第二欄為四大 categories：Object Information / Safety / Navigation / Vicinity Awareness
+# =================== Templates ===================
 question_templates = {
     # Object
     "count": ("How many {obj} are there?", "Object Information"),                      # 1
@@ -67,20 +63,20 @@ question_templates = {
     "blocking_obj_route": ("Is an {obj} blocking the {r}?", "Safety"),                 # 4
     "obstacle_bg": ("Are there obstacles on the {r}?", "Safety"),                      # 5
     "safe_to_walk": ("Is it safe to walk on the {r} ahead?", "Safety"),                # 6
-    "general_blocking": ("What is blocking the {r} ahead?", "Safety"),                 # 7 (Time)
+    "general_blocking": ("What is blocking the {r} ahead?", "Safety"),                 # 7 
 
     # Navigation
     "direction": ("What is the relative position of the {obj}?", "Navigation"),        # 8
     "walking_surface": ("Am I still walking on the {r}?", "Navigation"),               # 9
     "route_confirmation": ("Which region should I follow?", "Navigation"),             # 10
     "presence": ("Is the {obj} visible from here?", "Navigation"),                     # 11
-    "closest_object": ("Which of the following is closest in front of me?", "Navigation"),   # 12 (Time)
-    "farthest_object": ("Which of the following is the farthest in front of me?", "Navigation"), # 13 (Time)
+    "closest_object": ("Which of the following is closest in front of me?", "Navigation"),   # 12 
+    "farthest_object": ("Which of the following is the farthest in front of me?", "Navigation"), # 13 
 
     # Surrounding
     "front_presence": ("Is there an {obj} in front of me?", "Vicinity Awareness"),     # 14
-    "general_around": ("Which object is nearby?", "Vicinity Awareness"),               # 15 (Time)
-    "general_direction": ("Which object is on my {direction}?", "Vicinity Awareness"), # 16 (Time)
+    "general_around": ("Which object is nearby?", "Vicinity Awareness"),               # 15 
+    "general_direction": ("Which object is on my {direction}?", "Vicinity Awareness"), # 16 
 }
 
 # =================== Helpers ===================
@@ -102,7 +98,6 @@ def direction_options():
     return ["front","left","right","back"]
 
 def load_bitmap_abs(base_dir, mask_path):
-    """嘗試多種相對路徑載入 npz -> bool ndarray；失敗回 None。"""
     try_paths = []
     if os.path.isabs(mask_path):
         try_paths.append(mask_path)
@@ -130,7 +125,6 @@ def load_bitmap_cached(base_dir, mask_path):
     return bm
 
 def bm_iou(a: np.ndarray, b: np.ndarray) -> float:
-    """二值陣列 IoU。形狀不符或空回 0."""
     if a is None or b is None:
         return 0.0
     if a.shape != b.shape:
@@ -142,7 +136,6 @@ def bm_iou(a: np.ndarray, b: np.ndarray) -> float:
     return inter / float(union)
 
 def union_walkable_bg_bitmap(segments, base_dir, dilate_px=0):
-    """將當幀所有可走背景 bitmap OR 成一張；可選 dilation。"""
     union = None
     for seg in segments:
         ln = seg["label_name"]
@@ -173,12 +166,6 @@ def object_bitmap(seg, base_dir):
     return load_bitmap_abs(base_dir, mpath)
 
 def object_overlap_on_bg(object_seg, bg_union_bm, base_dir):
-    """
-    回 (overlap_on_object_ratio, has_overlap, used_bitmap)
-    - overlap_on_object_ratio = 交集 / 物件像素
-    - has_overlap：是否 >= BITMAP_OVERLAP_MIN
-    - used_bitmap：是否真的用 bitmap 判斷（避免無 mask 中斷）
-    """
     if bg_union_bm is None:
         return 0.0, False, False
     obm = object_bitmap(object_seg, base_dir)
@@ -192,12 +179,6 @@ def object_overlap_on_bg(object_seg, bg_union_bm, base_dir):
     return ratio, (ratio >= BITMAP_OVERLAP_MIN), True
 
 def pick_follow_region(segments):
-    """
-    回傳 (correct_name, options_list)
-    - options_list 來自本幀出現的 background（含 walkable 與非 walkable），去重最多 4 個
-    - correct：優先取「前方(front)且面積最大」的 walkable，否則取全圖面積最大 walkable；都沒有 -> "none of the above"
-    """
-    # 蒐集所有 background（顯示用名稱）與其代表面積
     all_bg = []
     for s in segments:
         if is_background(s["label_name"]) or (s["label_name"] in walkable_backgrounds):
@@ -206,16 +187,14 @@ def pick_follow_region(segments):
                 s.get("area_ratio", 0.0),
                 s.get("direction", None),
             ))
-    # 候選選項（背景名稱去重，依面積由大到小）
     from collections import defaultdict as _dd
     best_area_per_name = _dd(float)
     for name, ar, _ in all_bg:
         if ar > best_area_per_name[name]:
             best_area_per_name[name] = ar
     options_sorted = sorted(best_area_per_name.items(), key=lambda x: x[1], reverse=True)
-    options_names = [n for n,_ in options_sorted][:4]  # 最多 4 個
+    options_names = [n for n,_ in options_sorted][:4] 
 
-    # 找正解：前方的 walkable（面積最大）
     front_walkables = [
         (normalize_label(s["label_name"]), s.get("area_ratio",0.0))
         for s in segments
@@ -224,14 +203,12 @@ def pick_follow_region(segments):
     if front_walkables:
         correct = max(front_walkables, key=lambda x: x[1])[0]
     else:
-        # 其次：全圖最大的 walkable
         any_walkables = [
             (normalize_label(s["label_name"]), s.get("area_ratio",0.0))
             for s in segments if (s["label_name"] in walkable_backgrounds)
         ]
         correct = max(any_walkables, key=lambda x: x[1])[0] if any_walkables else "none of the above"
 
-    # 確保正解在選項裡
     if correct not in options_names:
         options_names = [correct] + options_names
     options_names = options_names[:4]
@@ -250,24 +227,15 @@ def remap_category(cat: str) -> str:
 
 # ==== Direction helpers ====
 def dirs_of_segments(segs):
-    # 蒐集該些 segments 的方向（front/left/right/back），去重+排序
     d = [s.get("direction") for s in segs if s.get("direction") in {"front","left","right","back"}]
     return sorted(set(d))
 
 def singleton_dir_list(d):
-    # 將單一方向字串轉為 list；若無則空 list
     return [d] if d in {"front","left","right","back"} else []
 
-# ===== 新版 pack_mcq：固定欄位順序與內容 =====
+
 def pack_mcq(qid_number, question_id, image, category, trigger_type, direction,
              q_text, correct, options, rnd: random.Random, mask_path=None):
-    """
-    欄位順序固定為：
-    {question_id, qid_number, image, category, trigger_type, direction, question, choices, answer, mask}
-    - category 需先經 remap_category()
-    - direction 為 list[str]，可空 list
-    """
-    # 整理 4 個選項
     uniq, seen = [], set()
     for o in options:
         if o not in seen:
@@ -297,7 +265,7 @@ def pack_mcq(qid_number, question_id, image, category, trigger_type, direction,
         "image": image,
         "category": remap_category(category),
         "trigger_type": trigger_type,
-        "direction": direction,          # list[str]
+        "direction": direction,         
         "question": q_text,
         "choices": choices,
         "answer": answer_letter,
@@ -306,16 +274,16 @@ def pack_mcq(qid_number, question_id, image, category, trigger_type, direction,
         out["mask"] = mask_path
     return out
 
-# =================== Main（遞迴找所有 panoptic.jsonl） ===================
+# =================== Main ===================
 panoptic_files = []
 for root, _, files in os.walk(input_dir):
     if "panoptic.jsonl" in files:
         panoptic_files.append(os.path.join(root, "panoptic.jsonl"))
 
 for pan_path in sorted(panoptic_files):
-    seq_dir = os.path.dirname(pan_path)                 # e.g., .../AU/01 或 .../GMU/GMUJcHubSdEn/01
-    rel_dir = os.path.relpath(seq_dir, input_dir)       # 相對於 input_dir 的路徑
-    base_dir_for_masks = seq_dir                        # 讓 mask.path 以該資料夾為基準
+    seq_dir = os.path.dirname(pan_path)                 
+    rel_dir = os.path.relpath(seq_dir, input_dir)      
+    base_dir_for_masks = seq_dir                        
 
     output_entries = []
     object_state = defaultdict(lambda: {"hist": deque(maxlen=PERSISTENCE_THRESHOLD), "armed": True})
@@ -329,7 +297,6 @@ for pan_path in sorted(panoptic_files):
             image = item["file_name"]
             segments = item.get("segments", [])
 
-            # 當幀 object 統計
             current_labels = defaultdict(int)
             label_to_segments = defaultdict(list)
             for seg in segments:
@@ -337,7 +304,6 @@ for pan_path in sorted(panoptic_files):
                 if not is_background(seg["label_name"]):
                     current_labels[seg["label_name"]] += 1
 
-            # 準備本幀 bitmaps（依 label 分組）
             curr_bms_by_label = defaultdict(list)
             for seg in segments:
                 ln = seg["label_name"]
@@ -350,7 +316,6 @@ for pan_path in sorted(panoptic_files):
                 if bm is not None:
                     curr_bms_by_label[ln].append(bm)
 
-            # 與上一幀 IoU 連續性
             continuity_by_label = {}
             all_labels = set(list(prev_bms_by_label.keys()) + list(curr_bms_by_label.keys()))
             for lbl in all_labels:
@@ -373,23 +338,21 @@ for pan_path in sorted(panoptic_files):
                 cont = bool(continuity_by_label.get(lbl, False))
                 st = object_state[lbl]
                 st["hist"].append(cont)
-                # 一旦中斷，就重置以便未來可再觸發
                 if not cont:
                     st["hist"].clear()
                     st["armed"] = True
             prev_bms_by_label = curr_bms_by_label
 
-            # 可走背景 union bitmap
             bg_union = union_walkable_bg_bitmap(segments, base_dir_for_masks, dilate_px=BG_DILATE_PX)
 
-            # ---------- Object 觸發 ----------
+            # ---------- Object  ----------
             triggered_labels = []
             for lbl, st in object_state.items():
                 if is_background(lbl):
                     continue
                 if st["armed"] and (len(st["hist"]) == PERSISTENCE_THRESHOLD) and all(st["hist"]):
                     triggered_labels.append(lbl)
-                    st["armed"] = False          # 觸發一次後關閉，直到中斷才重新開啟
+                    st["armed"] = False         
 
             for tlabel in triggered_labels:
                 obj_disp = normalize_label(tlabel)
@@ -398,10 +361,9 @@ for pan_path in sorted(panoptic_files):
                 rep_mask = (rep_seg.get("mask", {}).get("path") if rep_seg else None)
                 r_disp = next((normalize_label(s["label_name"]) for s in segments if s["label_name"] in walkable_backgrounds), "road")
 
-                # 物件方向集合
                 obj_dirs = dirs_of_segments(reps)
 
-                # 1) How many {obj} are there?  -> direction = 物件出現的方向集合
+                # 1) How many {obj} are there? 
                 q_text, q_cat = question_templates["count"]
                 correct = str(current_labels.get(tlabel, 0))
                 options = [correct, str(max(0, int(correct) - 1)), str(int(correct) + 1)]
@@ -411,7 +373,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp), correct, options, rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 2) Is the {obj} on my {direction}?  -> direction = [direction]
+                # 2) Is the {obj} on my {direction}?
                 for direction in ["left", "right", "front", "back"]:
                     q_text, q_cat = question_templates["sidedness"]
                     has_dir = any(seg.get("direction") == direction for seg in reps)
@@ -422,7 +384,7 @@ for pan_path in sorted(panoptic_files):
                                  q_text.format(obj=obj_disp, direction=direction), correct, yesno_options(), rnd, mask_path=rep_mask)
                     ); question_id += 1
 
-                # 3) Should I avoid the {obj} ahead? -> ["front"]
+                # 3) Should I avoid the {obj} ahead?
                 q_text, q_cat = question_templates["avoidance"]
                 frontish = any(seg.get("direction") == "front" for seg in reps)
                 risky = any(s.get("mean_depth", 1.0) <= DEPTH_NEAR_THR or s.get("area_ratio", 0.0) >= AREA_BIG_THR for s in reps)
@@ -436,7 +398,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 4) Is an {obj} blocking the {r}? -> ["front"]
+                # 4) Is an {obj} blocking the {r}?
                 q_text, q_cat = question_templates["blocking_obj_route"]
                 is_blocking, used_bitmap = False, False
                 if rep_seg is not None:
@@ -450,7 +412,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp, r=r_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 5) Are there obstacles on the {r}? -> []
+                # 5) Are there obstacles on the {r}?
                 q_text, q_cat = question_templates["obstacle_bg"]
                 has_obstacle = False
                 used_any_bitmap = False
@@ -472,7 +434,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 6) Is it safe to walk on the {r} ahead? -> ["front"]
+                # 6) Is it safe to walk on the {r} ahead?
                 q_text, q_cat = question_templates["safe_to_walk"]
                 unsafe = False
                 used_any_bitmap = False
@@ -496,7 +458,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 8) What is the relative position of the {obj}? -> [main_dir]
+                # 8) What is the relative position of the {obj}?
                 q_text, q_cat = question_templates["direction"]
                 dirs = [s.get("direction", "front") for s in reps]
                 main_dir = max(set(dirs), key=dirs.count) if dirs else "front"
@@ -506,7 +468,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp), main_dir, direction_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 9) Am I still walking on the {r}? -> []
+                # 9) Am I still walking on the {r}?
                 q_text, q_cat = question_templates["walking_surface"]
                 has_bg = any(s["label_name"] in walkable_backgrounds for s in segments)
                 correct = "Yes" if has_bg else "No"
@@ -516,7 +478,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(r=r_disp), correct, yesno_options(), rnd)
                 ); question_id += 1
 
-                # 10) Which region should I follow? -> ["front"]
+                # 10) Which region should I follow?
                 q_text, q_cat = question_templates["route_confirmation"]
                 correct_opt, options = pick_follow_region(segments)
                 rnd = seeded_random(rel_dir, image, question_id, q_text)
@@ -525,7 +487,7 @@ for pan_path in sorted(panoptic_files):
                              q_text, correct_opt, options, rnd)
                 ); question_id += 1
 
-                # 11) Is the {obj} visible from here? -> 物件方向集合
+                # 11) Is the {obj} visible from here?
                 q_text, q_cat = question_templates["presence"]
                 present = (current_labels.get(tlabel, 0) > 0)
                 correct = "Yes" if present else "No"
@@ -535,7 +497,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-                # 14) Is there an {obj} in front of me? -> ["front"]
+                # 14) Is there an {obj} in front of me?
                 q_text, q_cat = question_templates["front_presence"]
                 in_front = any(s.get("direction") == "front" for s in reps)
                 correct = "Yes" if in_front else "No"
@@ -545,17 +507,17 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(obj=obj_disp), correct, yesno_options(), rnd, mask_path=rep_mask)
                 ); question_id += 1
 
-            # ---------- Time 觸發 ----------
+            # ---------- Time ----------
             if (idx - last_time_tick) >= GENERAL_QUESTION_INTERVAL:
                 objs = [s for s in segments if not is_background(s["label_name"])]
 
-                # 7) What is blocking the {r} ahead? -> ["front"]
+                # 7) What is blocking the {r} ahead?
                 q_text, q_cat = question_templates["general_blocking"]
                 obj_names = sorted({normalize_label(s["label_name"]) for s in objs})
                 correct = obj_names[0] if obj_names else "none of the above"
                 pool = [o for o in object_labels if normalize_label(o) not in obj_names]
-                rnd = seeded_random(rel_dir, image, question_id, q_text)   # 先產生 rnd
-                rnd.shuffle(pool)                                          # 再 shuffle
+                rnd = seeded_random(rel_dir, image, question_id, q_text)  
+                rnd.shuffle(pool)                                          
                 options = [correct] + pool[:3]
                 r_disp = next((normalize_label(s["label_name"]) for s in segments
                                if s["label_name"] in walkable_backgrounds), "road")
@@ -564,7 +526,7 @@ for pan_path in sorted(panoptic_files):
                              q_text.format(r=r_disp), correct, options, rnd)
                 ); question_id += 1
 
-                # 12) Closest in front -> ["front"]
+                # 12) Closest in front
                 q_text, q_cat = question_templates["closest_object"]
                 front_objs = [(normalize_label(s["label_name"]), s.get("mean_depth", None), s.get("area_ratio", 0.0))
                               for s in objs if s.get("direction") == "front"]
@@ -582,7 +544,7 @@ for pan_path in sorted(panoptic_files):
                              q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 13) Farthest in front -> ["front"]
+                # 13) Farthest in front
                 q_text, q_cat = question_templates["farthest_object"]
                 if front_objs:
                     score = [(n, (d if d is not None else (1.0 - a))) for (n, d, a) in front_objs]
@@ -598,7 +560,7 @@ for pan_path in sorted(panoptic_files):
                              q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 15) Which object is nearby? -> 周圍方向集合
+                # 15) Which object is nearby?
                 q_text, q_cat = question_templates["general_around"]
                 if objs:
                     score_all = [(normalize_label(s["label_name"]), (s.get("mean_depth", None)), s.get("area_ratio", 0.0)) for s in objs]
@@ -615,7 +577,7 @@ for pan_path in sorted(panoptic_files):
                              q_text, correct, options, rnd)
                 ); question_id += 1
 
-                # 16) Which object is on my {direction}? -> [direction]
+                # 16) Which object is on my {direction}?
                 for direction in ["left", "right", "front", "back"]:
                     q_text, q_cat = question_templates["general_direction"]
                     dir_objs = [normalize_label(s["label_name"]) for s in objs if s.get("direction") == direction]
@@ -637,7 +599,6 @@ for pan_path in sorted(panoptic_files):
 
                 last_time_tick = idx
 
-    # 依相對路徑取名，例如 AU/01 -> AU_01_questions_mcq.jsonl
     rel_name = rel_dir.replace(os.sep, "_")
     os.makedirs(output_dir, exist_ok=True)
     outname = os.path.join(output_dir, f"{rel_name}_questions_mcq.jsonl")

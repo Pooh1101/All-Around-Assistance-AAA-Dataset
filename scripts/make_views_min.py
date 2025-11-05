@@ -24,7 +24,6 @@ def e2p(img, fov_deg, out_hw):
     return p360.e2p(img, fov_deg=float(fov_deg), u_deg=YAW_DEG, v_deg=PITCH_DEG,
                     out_hw=out_hw, mode=E2P_MODE)
 
-# --- 180 fisheye ---
 def equirect_to_fisheye_180(e_img, out_size=640, yaw_deg=0.0, pitch_deg=0.0,
                             y_axis_down=True, return_mask=False):
     H_e, W_e = e_img.shape[:2]; H = W = int(out_size)
